@@ -345,7 +345,7 @@ private[remote] class Association(
  */
 private[remote] class AssociationRegistry(createAssociation: Address ⇒ Association) {
   private[this] val associationsByAddress = new AtomicReference[Map[Address, Association]](Map.empty)
-  private[this] val associationsByUid = new ConcurrentHashMap[Long, Association]() // FIXME replace with specialized Long Map
+  private[this] val associationsByUid = new NonBlockingHashMapLong[Association]() // FIXME replace with specialized Long Map
 
   @tailrec final def association(remoteAddress: Address): Association = {
     val currentMap = associationsByAddress.get
