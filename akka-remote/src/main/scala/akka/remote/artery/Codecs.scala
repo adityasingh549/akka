@@ -1,7 +1,6 @@
 package akka.remote.artery
 
 import scala.util.control.NonFatal
-
 import akka.actor.{ ActorRef, InternalActorRef }
 import akka.actor.ActorSystem
 import akka.actor.ExtendedActorSystem
@@ -11,6 +10,7 @@ import akka.remote.artery.SystemMessageDelivery.SystemMessageEnvelope
 import akka.serialization.{ Serialization, SerializationExtension }
 import akka.stream._
 import akka.stream.stage.{ GraphStage, GraphStageLogic, InHandler, OutHandler }
+import akka.util.OptionVal
 
 // TODO: Long UID
 class Encoder(
@@ -34,7 +34,6 @@ class Encoder(
       private val serialization = SerializationExtension(system)
       private val serializationInfo = Serialization.Information(localAddress, system)
 
-      private val noSender = system.deadLetters.path.toSerializationFormatWithAddress(localAddress)
       private val senderCache = new java.util.HashMap[ActorRef, String]
       private var recipientCache = new java.util.HashMap[ActorRef, String]
 
@@ -56,22 +55,21 @@ class Encoder(
         }
         headerBuilder.recipientActorRef = recipientStr
 
-        send.senderOption match {
-          case Some(sender) ⇒
-            val senderStr = senderCache.get(sender) match {
-              case null ⇒
-                val s = sender.path.toSerializationFormatWithAddress(localAddress)
-                // FIXME we might need an efficient LRU cache, or replaced by compression table
-                if (senderCache.size() >= 1000)
-                  senderCache.clear()
-                senderCache.put(sender, s)
-                s
-              case s ⇒ s
-            }
-            headerBuilder.senderActorRef = senderStr
-          case None ⇒
-            //headerBuilder.setNoSender()
-            headerBuilder.senderActorRef = noSender
+        if (send.senderOption.isEmpty) {
+          headerBuilder.setNoSender()
+        } else {
+          val sender = send.senderOption.get
+          val senderStr = senderCache.get(sender) match {
+            case null ⇒
+              val s = sender.path.toSerializationFormatWithAddress(localAddress)
+              // FIXME we might need an efficient LRU cache, or replaced by compression table
+              if (senderCache.size() >= 1000)
+                senderCache.clear()
+              senderCache.put(sender, s)
+              s
+            case s ⇒ s
+          }
+          headerBuilder.senderActorRef = senderStr
         }
 
         try {
@@ -124,7 +122,7 @@ class Decoder(
       private val serialization = SerializationExtension(system)
 
       private val recipientCache = new java.util.HashMap[String, InternalActorRef]
-      private val senderCache = new java.util.HashMap[String, Option[ActorRef]]
+      private val senderCache = new java.util.HashMap[String, ActorRef]
 
       override protected def logSource = classOf[Decoder]
 
@@ -146,17 +144,21 @@ class Decoder(
           case ref ⇒ ref
         }
 
-        val senderOption: Option[ActorRef] = senderCache.get(headerBuilder.senderActorRef) match {
-          case null ⇒
-            val ref = resolveActorRefWithLocalAddress(headerBuilder.senderActorRef)
-            // FIXME this cache will be replaced by compression table
-            if (senderCache.size() >= 1000)
-              senderCache.clear()
-            val refOpt = Some(ref)
-            senderCache.put(headerBuilder.senderActorRef, refOpt)
-            refOpt
-          case refOpt ⇒ refOpt
-        }
+        val senderOption =
+          if (headerBuilder.isNoSender)
+            OptionVal.None
+          else {
+            senderCache.get(headerBuilder.senderActorRef) match {
+              case null ⇒
+                val ref = resolveActorRefWithLocalAddress(headerBuilder.senderActorRef)
+                // FIXME this cache will be replaced by compression table
+                if (senderCache.size() >= 1000)
+                  senderCache.clear()
+                senderCache.put(headerBuilder.senderActorRef, ref)
+                OptionVal(ref)
+              case ref ⇒ OptionVal(ref)
+            }
+          }
 
         try {
           val deserializedMessage = MessageSerializer.deserializeForArtery(
@@ -166,7 +168,7 @@ class Decoder(
             recipient,
             localAddress, // FIXME: Is this needed anymore? What should we do here?
             deserializedMessage,
-            senderOption, // FIXME: No need for an option, decode simply to deadLetters instead
+            senderOption,
             headerBuilder.uid)
 
           push(out, decoded)

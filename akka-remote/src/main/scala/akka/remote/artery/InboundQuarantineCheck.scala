@@ -12,6 +12,7 @@ import akka.stream.stage.GraphStageLogic
 import akka.stream.stage.InHandler
 import akka.stream.stage.OutHandler
 import akka.remote.UniqueAddress
+import akka.util.OptionVal
 
 /**
  * INTERNAL API
@@ -27,18 +28,19 @@ private[akka] class InboundQuarantineCheck(inboundContext: InboundContext) exten
       // InHandler
       override def onPush(): Unit = {
         val env = grab(in)
-        inboundContext.association(env.originUid) match {
-          case null ⇒
-            // unknown, handshake not completed
+        val associationOpt = inboundContext.association(env.originUid)
+        if (associationOpt.isEmpty) {
+          // unknown, handshake not completed
+          push(out, env)
+        } else {
+          val association = associationOpt.get
+          if (association.associationState.isQuarantined(env.originUid)) {
+            inboundContext.sendControl(
+              association.remoteAddress,
+              Quarantined(inboundContext.localAddress, UniqueAddress(association.remoteAddress, env.originUid)))
+            pull(in)
+          } else
             push(out, env)
-          case association ⇒
-            if (association.associationState.isQuarantined(env.originUid)) {
-              inboundContext.sendControl(
-                association.remoteAddress,
-                Quarantined(inboundContext.localAddress, UniqueAddress(association.remoteAddress, env.originUid)))
-              pull(in)
-            } else
-              push(out, env)
         }
       }
 
