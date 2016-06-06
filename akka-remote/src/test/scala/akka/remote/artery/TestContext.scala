@@ -17,6 +17,18 @@ import akka.remote.UniqueAddress
 import akka.remote.artery.InboundControlJunction.ControlMessageObserver
 import akka.remote.artery.InboundControlJunction.ControlMessageSubject
 import akka.util.OptionVal
+import akka.actor.InternalActorRef
+
+private[akka] final case class TestInboundEnvelope(
+  recipient:        InternalActorRef,
+  recipientAddress: Address,
+  message:          AnyRef,
+  senderOption:     OptionVal[ActorRef],
+  originUid:        Long) extends InboundEnvelope {
+
+  override def withMessage(message: AnyRef): InboundEnvelope =
+    copy(message = message)
+}
 
 private[akka] class TestInboundContext(
   override val localAddress: UniqueAddress,
@@ -84,7 +96,7 @@ private[akka] class TestOutboundContext(
 
   override def sendControl(message: ControlMessage) = {
     controlProbe.foreach(_ ! message)
-    controlSubject.sendControl(InboundEnvelope(null, remoteAddress, message, OptionVal.None, localAddress.uid))
+    controlSubject.sendControl(TestInboundEnvelope(null, remoteAddress, message, OptionVal.None, localAddress.uid))
   }
 
   // FIXME we should be able to Send without a recipient ActorRef

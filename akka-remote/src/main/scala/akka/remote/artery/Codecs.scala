@@ -17,7 +17,7 @@ class Encoder(
   uniqueLocalAddress: UniqueAddress,
   system:             ActorSystem,
   compressionTable:   LiteralCompressionTable,
-  pool:               EnvelopeBufferPool)
+  bufferPool:         EnvelopeBufferPool)
   extends GraphStage[FlowShape[Send, EnvelopeBuffer]] {
 
   val in: Inlet[Send] = Inlet("Artery.Encoder.in")
@@ -41,7 +41,7 @@ class Encoder(
 
       override def onPush(): Unit = {
         val send = grab(in)
-        val envelope = pool.acquire()
+        val envelope = bufferPool.acquire()
 
         val recipientStr = recipientCache.get(send.recipient) match {
           case null ⇒
@@ -86,7 +86,7 @@ class Encoder(
 
         } catch {
           case NonFatal(e) ⇒
-            pool.release(envelope)
+            bufferPool.release(envelope)
             send.message match {
               case _: SystemMessageEnvelope ⇒
                 log.error(e, "Failed to serialize system message [{}].", send.message.getClass.getName)
@@ -110,7 +110,8 @@ class Decoder(
   system:                          ExtendedActorSystem,
   resolveActorRefWithLocalAddress: String ⇒ InternalActorRef,
   compressionTable:                LiteralCompressionTable,
-  pool:                            EnvelopeBufferPool) extends GraphStage[FlowShape[EnvelopeBuffer, InboundEnvelope]] {
+  bufferPool:                      EnvelopeBufferPool,
+  inEnvelopePool:                  ObjectPool[InboundEnvelope]) extends GraphStage[FlowShape[EnvelopeBuffer, InboundEnvelope]] {
   val in: Inlet[EnvelopeBuffer] = Inlet("Artery.Decoder.in")
   val out: Outlet[InboundEnvelope] = Outlet("Artery.Decoder.out")
   val shape: FlowShape[EnvelopeBuffer, InboundEnvelope] = FlowShape(in, out)
@@ -164,7 +165,8 @@ class Decoder(
           val deserializedMessage = MessageSerializer.deserializeForArtery(
             system, serialization, headerBuilder, envelope)
 
-          val decoded = InboundEnvelope(
+          val decoded = inEnvelopePool.acquire()
+          decoded.asInstanceOf[ReusableInboundEnvelope].init(
             recipient,
             localAddress, // FIXME: Is this needed anymore? What should we do here?
             deserializedMessage,
@@ -179,7 +181,7 @@ class Decoder(
               headerBuilder.serializer, headerBuilder.manifest, e.getMessage)
             pull(in)
         } finally {
-          pool.release(envelope)
+          bufferPool.release(envelope)
         }
       }
 
